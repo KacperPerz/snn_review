@@ -1,7 +1,7 @@
 from mnist_ratio_utils import *
 import os
 import numpy as np
-
+from tqdm import tqdm
 
 
 # Create lists to store results for all models
@@ -12,18 +12,21 @@ all_labels = []
 all_metrics = []
 
 ALL_MODELS = load_models()
-# check what is model in all_models
-for i, model in enumerate(ALL_MODELS):
-  print(f"Model {i}: {model}")
+
   
 device = ("mps" if torch.backends.mps.is_available() else "cpu")
 
 # load data
 train_loader, val_loader, _ = get_mnist_ratio_dataloaders()
 
+# After loading datadd
+sample_batch = next(iter(train_loader))
+print(sample_batch)
+print(f"Input data range: min={sample_batch.min().item():.4f}, max={sample_batch.max().item():.4f}")
+print(f"Input data mean: {sample_batch.mean().item():.4f}, std: {sample_batch.std().item():.4f}")
 
-# Iterate through each model in ALL_MODELS
-for model_idx, model in enumerate(ALL_MODELS):
+# Iterate through each model in ALL_MODELS with tqdm for progress tracking
+for model_idx, model in enumerate(tqdm(ALL_MODELS, desc="Processing models")):
   print(f"\nProcessing model {model_idx + 1}/{len(ALL_MODELS)}")
   
   # Convert ANN to SNN
@@ -31,12 +34,12 @@ for model_idx, model in enumerate(ALL_MODELS):
   
   # Detect anomalies using the SNN
   errors, reconstructions, originals, labels = detect_anomalies_spiking(
-    snn_model, val_loader, device, num_examples=10
+  snn_model, val_loader, device, num_examples=2000
   )
   
   # Calculate metrics
   best_threshold, best_f1_score, indices, sorted_labels, sorted_errors = check_thresholds(
-    errors, labels
+  errors, labels
   )
   
   # Calculate additional metrics
@@ -61,14 +64,14 @@ for model_idx, model in enumerate(ALL_MODELS):
   all_originals.append(originals)
   all_labels.append(sorted_labels)
   all_metrics.append({
-    'threshold': best_threshold,
-    'f1_score': best_f1_score,
-    'precision': precision,
-    'recall': recall,
-    'tp': tp,
-    'fn': fn,
-    'tn': tn,
-    'fp': fp
+  'threshold': best_threshold,
+  'f1_score': best_f1_score,
+  'precision': precision,
+  'recall': recall,
+  'tp': tp,
+  'fn': fn,
+  'tn': tn,
+  'fp': fp
   })
   
   print(f"Model metrics:")
@@ -107,23 +110,43 @@ torch.save({
 
 import matplotlib.pyplot as plt
 
-# Print data shapes for debugging and understanding
-print("\nExamining data shapes:")
-for i, (errors, reconstructions, originals, labels) in enumerate(zip(all_errors, all_reconstructions, all_originals, all_labels)):
-  print(f"\nModel {i} ({model_names[i]}):")
-  print(f"  Errors shape: {np.array(errors).shape}")
-  if isinstance(reconstructions, torch.Tensor):
-    print(f"  Reconstructions shape: {reconstructions.shape}")
-  else:
-    print(f"  Reconstructions type: {type(reconstructions)}")
+# Create a function to plot error distributions for a model
+def plot_error_distribution(errors, labels, threshold, title):
+  fig, ax = plt.subplots(figsize=(10, 6))
   
-  if isinstance(originals, torch.Tensor):
-    print(f"  Originals shape: {originals.shape}")
-  else:
-    print(f"  Originals type: {type(originals)}")
+  # Convert to numpy for easier indexing
+  errors_np = np.array(errors)
+  labels_np = np.array(labels)
   
-  print(f"  Labels shape: {np.array(labels).shape}")
+  # Separate errors for anomalous and normal data
+  anomalous_errors = errors_np[labels_np == 0]
+  normal_errors = errors_np[labels_np != 0]
   
-  # Print some statistics
-  print(f"  Errors - min: {min(errors):.4f}, max: {max(errors):.4f}, mean: {np.mean(errors):.4f}")
-  print(f"  Label distribution: {np.bincount(np.array(labels))}")
+  # Plot histograms
+  ax.hist(anomalous_errors, bins=50, alpha=0.6, label='Anomalous (0)', density=True)
+  ax.hist(normal_errors, bins=50, alpha=0.6, label='Normal (1-9)', density=True)
+  ax.axvline(np.quantile(errors_np, threshold), color='r', linestyle='--', 
+         label=f'Threshold ({threshold:.2f})')
+  ax.set_xlabel('Reconstruction Error')
+  ax.set_ylabel('Density')
+  ax.set_title(title)
+  ax.legend()
+  
+  return fig
+
+# Create a directory for the plots
+plots_dir = "results/error_distributions"
+if not os.path.exists(plots_dir):
+  os.makedirs(plots_dir)
+
+# Plot error distribution for each model
+for i, (errors, labels, metrics, model_name) in enumerate(zip(all_errors, all_labels, all_metrics, model_names)):
+  title = f"Distribution of Reconstruction Errors - {model_name}"
+  fig = plot_error_distribution(errors, labels, metrics['threshold'], title)
+  
+  # Save the figure
+  save_path = os.path.join(plots_dir, f"error_dist_model_{i}.png")
+  fig.savefig(save_path)
+  plt.close(fig)
+  
+  print(f"Saved error distribution plot for {model_name} to {save_path}")

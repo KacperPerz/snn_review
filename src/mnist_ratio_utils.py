@@ -157,9 +157,9 @@ def load_models():
 
 
 class MNIST_ratio(datasets.MNIST):
-    def __init__(self, root, train=True, is_spiking=False, time_window=100):
+    def __init__(self, root, train=True, is_spiking=False, time_window=100, transform=transforms.Compose([transforms.ToTensor()])):
         super().__init__(
-            root=root, train=train, download=True, transform=transforms.ToTensor()
+            root=root, train=train, download=True, transform=transform
         )
         self.is_spiking = is_spiking
         self.time_window = time_window
@@ -175,12 +175,9 @@ class MNIST_ratio(datasets.MNIST):
     
 
 def get_mnist_ratio_dataloaders(batch_size=128, data_root='../data'):
-    transform = transforms.Compose([
-        transforms.ToTensor()
-    ])
-
-    train_dataset = MNIST_ratio(root=data_root, train=True, is_spiking=False, time_window=100)
-    test_dataset = MNIST_ratio(root=data_root, train=False, is_spiking=False, time_window=100)
+    transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset = datasets.MNIST(root='../data', train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST(root='../data', train=False, download=True, transform=transform)
 
     # split train dataset for train and validation
     train_set, val_set = torch.utils.data.random_split(train_dataset, [50000, 10000])
