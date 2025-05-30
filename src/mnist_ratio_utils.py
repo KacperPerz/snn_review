@@ -154,24 +154,6 @@ def load_models():
     loaded_models.append(model)
   
   return loaded_models
-
-
-class MNIST_ratio(datasets.MNIST):
-    def __init__(self, root, train=True, is_spiking=False, time_window=100, transform=transforms.Compose([transforms.ToTensor()])):
-        super().__init__(
-            root=root, train=train, download=True, transform=transform
-        )
-        self.is_spiking = is_spiking
-        self.time_window = time_window
-
-    def __getitem__(self, index):
-        img, target = self.data[index].view(1, -1), self.targets[index]
-        # img is now a tensor of 1x784
-
-        if self.is_spiking:
-            img = (torch.rand(self.time_window, *img.shape) < img).float()
-
-        return img, target
     
 
 def get_mnist_ratio_dataloaders(batch_size=128, data_root='../data'):

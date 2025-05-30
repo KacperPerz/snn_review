@@ -45,10 +45,16 @@ class MNIST_Temporal(datasets.MNIST):
         
         # Generate one-hot encoded tensor of size [time_steps, 784]
         spikes = torch.zeros(self.time_steps, 784)
-        # For each neuron, set spike to 1 at its specific time step
-        for i, t in enumerate(temporal_code):
-            if t < self.time_steps:  # Ensure time index is valid
-                spikes[t, i] = 1.0
+        
+        # Optimized vectorized spike setting (replaces slow loop)
+        # Create mask for valid time indices
+        valid_mask = temporal_code < self.time_steps
+        valid_times = temporal_code[valid_mask]
+        valid_indices = torch.arange(784, device=img_flat.device)[valid_mask]
+        
+        # Set spikes using advanced indexing - much faster than loop
+        if len(valid_times) > 0:  # Only if there are valid spikes
+            spikes[valid_times, valid_indices] = 1.0
         
         return spikes, img_flat, target # Return spikes, original flat image, and label
 
@@ -57,9 +63,9 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     Loads and preprocesses MNIST data with temporal encoding for SNN autoencoders.
 
     Returns:
-        train_loader_ae: DataLoader for training.
-        val_loader_reduced_ae: DataLoader for validation (reduced set with specific class distribution).
-        test_loader_ae: DataLoader for testing.
+        train_loader_ae: DataLoader for training - returns (spikes, images, labels).
+        val_loader_reduced_ae: DataLoader for validation - returns (spikes, images, labels).
+        test_loader_ae: DataLoader for testing - returns (spikes, images, labels).
     """
     transform_ae = transforms.Compose([transforms.ToTensor()])
 
@@ -72,32 +78,38 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     generator = torch.Generator().manual_seed(42) # Use a fixed seed for splitting
     train_subset, val_subset = random_split(master_train_val_dataset, [50000, 10000], generator=generator)
 
-    # Train AE DataLoader (derived from train_subset, filtering out digit '0')
+    # Train AE DataLoader (derived from master_train_val_dataset, filtering out digit '0')
     train_spikes_normal_ae = []
     train_images_normal_ae = []
-    for spikes, img_flat, label in train_subset:
+    train_labels_normal_ae = []
+    for spikes, img_flat, label in master_train_val_dataset:
         if label != 0: # Filter out digit '0'
             train_spikes_normal_ae.append(spikes)
             train_images_normal_ae.append(img_flat)
+            train_labels_normal_ae.append(label)
     
     if not train_spikes_normal_ae:
         raise ValueError("Training subset for autoencoder is empty after filtering out '0'. Check data or split.")
 
     train_spikes_ae_tensor = torch.stack(train_spikes_normal_ae)
     train_images_ae_tensor = torch.stack(train_images_normal_ae)
-    train_loader_ae = DataLoader(TensorDataset(train_spikes_ae_tensor, train_images_ae_tensor), batch_size=batch_size, shuffle=True)
+    train_labels_ae_tensor = torch.tensor(train_labels_normal_ae)
+    train_loader_ae = DataLoader(TensorDataset(train_spikes_ae_tensor, train_images_ae_tensor, train_labels_ae_tensor), 
+                                batch_size=batch_size, shuffle=True)
     
     # Count number of 0s and 1-9s in the original train_subset for verification
-    original_train_labels = torch.tensor([label for _, _, label in train_subset])
+    original_train_labels = torch.tensor([label for _, _, label in master_train_val_dataset])
     num_zeros_in_train = (original_train_labels == 0).sum().item()
     num_non_zeros_in_train = (original_train_labels != 0).sum().item()
-    print(f"Original train_subset: {len(train_subset)} samples. Zeros: {num_zeros_in_train}, Non-zeros: {num_non_zeros_in_train}")
+    print(f"Original master_train_val_dataset: {len(master_train_val_dataset)} samples. Zeros: {num_zeros_in_train}, Non-zeros: {num_non_zeros_in_train}")
     print(f"Filtered train_loader_ae: {len(train_spikes_ae_tensor)} samples (should be non-zeros).")
 
     # Test AE DataLoader (derived from master_test_dataset)
     test_spikes_ae = torch.stack([s for s, _, _ in master_test_dataset])
     test_images_ae = torch.stack([i for _, i, _ in master_test_dataset])
-    test_loader_ae = DataLoader(TensorDataset(test_spikes_ae, test_images_ae), batch_size=batch_size, shuffle=False)
+    test_labels_ae = torch.tensor([l for _, _, l in master_test_dataset])
+    test_loader_ae = DataLoader(TensorDataset(test_spikes_ae, test_images_ae, test_labels_ae), 
+                               batch_size=batch_size, shuffle=False)
 
     # Validation AE DataLoader (Reduced, derived from val_subset)
     val_spikes_full = torch.stack([s for s, _, _ in val_subset])
@@ -125,10 +137,17 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     val_images_reduced_0 = val_images_full[indices_0_mask]
     target_images_val_reduced_ae = torch.cat((val_images_reduced_1_9, val_images_reduced_0), dim=0)
     
-    # val_labels_for_reduced_set = torch.cat((val_labels_full[indices_1_9_mask][random_indices_1_9], val_labels_full[indices_0_mask]), dim=0)
-    # print(f"Reduced validation set label counts: {torch.unique(val_labels_for_reduced_set, return_counts=True)}")
+    # Include labels for validation set
+    val_labels_reduced_1_9 = val_labels_full[indices_1_9_mask][random_indices_1_9]
+    val_labels_reduced_0 = val_labels_full[indices_0_mask]
+    val_labels_reduced = torch.cat((val_labels_reduced_1_9, val_labels_reduced_0), dim=0)
+    
+    num_zeros_reduced = (val_labels_reduced == 0).sum().item()
+    num_non_zeros_reduced = (val_labels_reduced != 0).sum().item()
+    print(f"Reduced validation set: {len(val_labels_reduced)} samples. Zeros: {num_zeros_reduced}, Non-zeros: {num_non_zeros_reduced}")
 
-    val_loader_reduced_ae = DataLoader(TensorDataset(val_spikes_reduced_ae_input, target_images_val_reduced_ae), batch_size=batch_size, shuffle=False)
+    val_loader_reduced_ae = DataLoader(TensorDataset(val_spikes_reduced_ae_input, target_images_val_reduced_ae, val_labels_reduced), 
+                                      batch_size=batch_size, shuffle=False)
 
     return train_loader_ae, val_loader_reduced_ae, test_loader_ae
 
@@ -146,13 +165,15 @@ if __name__ == '__main__':
     print(f"Number of batches in test_loader_ae: {len(test_loader)}")
 
     # Check a batch from train_loader
-    spikes_batch, images_batch = next(iter(train_loader))
+    spikes_batch, images_batch, labels_batch = next(iter(train_loader))
     print(f"Train spikes batch shape: {spikes_batch.shape}") # Expected: (batch_size, time_steps, 784)
     print(f"Train images batch shape: {images_batch.shape}")   # Expected: (batch_size, 784)
+    print(f"Train labels batch shape: {labels_batch.shape}")     # Expected: (batch_size,)
 
     # Check a batch from val_loader_reduced_ae
-    spikes_val_batch, images_val_batch = next(iter(val_loader))
+    spikes_val_batch, images_val_batch, labels_val_batch = next(iter(val_loader))
     print(f"Val spikes batch shape: {spikes_val_batch.shape}")
     print(f"Val images batch shape: {images_val_batch.shape}")
+    print(f"Val labels batch shape: {labels_val_batch.shape}")
 
     print("Data loading test complete.") 
