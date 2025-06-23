@@ -17,6 +17,7 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, '..'))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 from architecture.ann_architecture import *
+from architecture.snn_architecture import *
 
 
 def conversion_ann_snn(ann_model):
@@ -174,17 +175,17 @@ def get_mnist_ratio_dataloaders(batch_size=128, data_root='../data'):
 
     # Keep all training data
     train_data = torch.stack(train_data)
-    train_loader = DataLoader(train_data, batch_size=128, shuffle=True)
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
 
     # Keep all validation data
     val_data = torch.stack([data.view(-1) for data, _ in val_set])
     val_labels = torch.tensor([label for _, label in val_set])
-    val_loader = DataLoader(TensorDataset(val_data, val_labels), batch_size=128)
+    val_loader = DataLoader(TensorDataset(val_data, val_labels), batch_size=batch_size)
 
     # Keep all test data
     test_data = torch.stack([data.view(-1) for data, _ in test_dataset])
     test_labels = torch.tensor([label for _, label in test_dataset])
-    test_loader = DataLoader(TensorDataset(test_data, test_labels), batch_size=128)
+    test_loader = DataLoader(TensorDataset(test_data, test_labels), batch_size=batch_size)
 
     indices_1_9 = (val_labels != 0).nonzero(as_tuple=True)[0]
     indices_1_9 = val_labels != 0
@@ -199,6 +200,43 @@ def get_mnist_ratio_dataloaders(batch_size=128, data_root='../data'):
     val_data_reduced = torch.cat((val_data_reduced, val_data[indices_0]), dim=0)
     val_labels_reduced = torch.cat((val_labels_reduced, val_labels[indices_0]), dim=0)
 
-    val_loader_reduced = DataLoader(TensorDataset(val_data_reduced, val_labels_reduced), batch_size=128, shuffle=True)
+    val_loader_reduced = DataLoader(TensorDataset(val_data_reduced, val_labels_reduced), batch_size=batch_size, shuffle=True)
 
     return train_loader, val_loader_reduced, test_loader
+
+
+def load_temporal_models():
+    models_dir = '../models/mnist/snn/temporal'
+    model_names = ['SmallSNNAutoencoder_32.pth', 'SmallSNNAutoencoder_16.pth', 'SmallSNNAutoencoder_8.pth',
+           'BigSNNAutoencoder_32.pth', 'BigSNNAutoencoder_16.pth', 'BigSNNAutoencoder_8.pth',
+           'MediumSNNAutoencoder_32.pth', 'MediumSNNAutoencoder_16.pth', 'MediumSNNAutoencoder_8.pth']
+
+    loaded_models = []
+    for model_name in model_names:
+        model_path = os.path.join(models_dir, model_name)
+        if 'SmallSNNAutoencoder_32' in model_name:
+            model = SmallSNNAutoencoder(latent_size=32)
+        elif 'SmallSNNAutoencoder_16' in model_name:
+            model = SmallSNNAutoencoder(latent_size=16)
+        elif 'SmallSNNAutoencoder_8' in model_name:
+            model = SmallSNNAutoencoder(latent_size=8)
+        elif 'BigSNNAutoencoder_32' in model_name:
+            model = BigSNNAutoencoder(latent_size=32)
+        elif 'BigSNNAutoencoder_16' in model_name:
+            model = BigSNNAutoencoder(latent_size=16)
+        elif 'BigSNNAutoencoder_8' in model_name:
+            model = BigSNNAutoencoder(latent_size=8)
+        elif 'MediumSNNAutoencoder_32' in model_name:
+            model = MediumSNNAutoencoder(latent_size=32)
+        elif 'MediumSNNAutoencoder_16' in model_name:
+            model = MediumSNNAutoencoder(latent_size=16)
+        elif 'MediumSNNAutoencoder_8' in model_name:
+            model = MediumSNNAutoencoder(latent_size=8)
+        else:
+            raise ValueError(f"Unknown model name: {model_name}")
+        
+        model.load_state_dict(torch.load(model_path))
+        model.eval()
+        loaded_models.append(model)
+
+    return loaded_models

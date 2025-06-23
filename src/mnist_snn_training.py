@@ -37,7 +37,7 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Hyperparameters
-learning_rate_ae = 2e-3
+learning_rate_ae = 5e-4
 beta_snn = 0.9
 
 # Define all model configurations

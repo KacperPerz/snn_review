@@ -1,20 +1,62 @@
 import torch
-import torchvision.transforms as transforms
-from torchvision import datasets
+from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, TensorDataset, random_split
-import numpy as np
-import matplotlib.pyplot as plt
-import snntorch.spikegen as spikegen
 
 
+ANOMALY_LABEL = 0
 
-# Seed for reproducibility within data loading, if desired, though often set in main script
-# torch.manual_seed(0)
-# np.random.seed(0)
+# fmnist for ann or rate snn
+def get_fmnist_ratio_dataloaders(batch_size=128, data_root='../data'):
+    transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset = datasets.FashionMNIST(root='../data', train=True, download=True, transform=transform)
+    test_dataset = datasets.FashionMNIST(root='../data', train=False, download=True, transform=transform)
 
-class MNIST_Temporal(datasets.MNIST):
+    # split train dataset for train and validation
+    train_set, val_set = torch.utils.data.random_split(train_dataset, [50000, 10000])
+
+    # Filter out zeros from training data
+    train_data = []
+    train_labels = []
+    for data, label in train_dataset:
+        if label != ANOMALY_LABEL:
+            train_data.append(data.view(-1))
+            train_labels.append(label)
+
+    # Keep all training data
+    train_data = torch.stack(train_data)
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+
+    # Keep all validation data
+    val_data = torch.stack([data.view(-1) for data, _ in val_set])
+    val_labels = torch.tensor([label for _, label in val_set])
+    val_loader = DataLoader(TensorDataset(val_data, val_labels), batch_size=batch_size)
+
+    # Keep all test data
+    test_data = torch.stack([data.view(-1) for data, _ in test_dataset])
+    test_labels = torch.tensor([label for _, label in test_dataset])
+    test_loader = DataLoader(TensorDataset(test_data, test_labels), batch_size=batch_size)
+
+    normal_indices = (val_labels != ANOMALY_LABEL).nonzero(as_tuple=True)[0]
+    normal_indices = val_labels != ANOMALY_LABEL
+    anomaly_indices = val_labels == ANOMALY_LABEL
+
+    # Randomly choose 1000 examples from val_data[indices_1_9]
+    num_samples = 1000  
+    random_indices = torch.randperm(len(val_data[normal_indices]))[:num_samples]
+    val_data_reduced = val_data[normal_indices][random_indices]
+    val_labels_reduced = val_labels[normal_indices][random_indices]
+
+    val_data_reduced = torch.cat((val_data_reduced, val_data[anomaly_indices]), dim=0)
+    val_labels_reduced = torch.cat((val_labels_reduced, val_labels[anomaly_indices]), dim=0)
+
+    val_loader_reduced = DataLoader(TensorDataset(val_data_reduced, val_labels_reduced), batch_size=batch_size, shuffle=True)
+
+    return train_loader, val_loader_reduced, test_loader
+
+
+class FashionMNIST_Temporal(datasets.FashionMNIST):
     def __init__(self, root, train=True, download=True, transform=transforms.ToTensor(),
-                 time_steps=10, t_max=1.0):
+                 time_steps=25, t_max=1.0):
         """
         MNIST dataset with temporal (latency) encoding.
         
@@ -35,8 +77,6 @@ class MNIST_Temporal(datasets.MNIST):
         img, target = super().__getitem__(index)
         # Reshape image to 784 pixels (flattened 28x28)
         img_flat = img.view(-1)
-        spike_data = spikegen.latency(img_flat, num_steps=self.time_steps, 
-                             tau=5, threshold=0.01, linear=True, normalize=True)
         
         # Temporal encoding: Convert pixel intensity to spike timing
         # Higher intensity (closer to 1) = earlier spike (closer to 0)
@@ -62,9 +102,10 @@ class MNIST_Temporal(datasets.MNIST):
         if len(valid_times) > 0:  # Only if there are valid spikes
             spikes[valid_times, valid_indices] = 1.0
         
-        return spike_data, img_flat, target # Return spikes, original flat image, and label
+        return spikes, img_flat, target # Return spikes, original flat image, and label
 
-def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
+# fmnist for temporal snn
+def get_fmnist_temporal_dataloaders(batch_size=128, data_root='../data'):
     """
     Loads and preprocesses MNIST data with temporal encoding for SNN autoencoders.
 
@@ -76,8 +117,8 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     transform_ae = transforms.Compose([transforms.ToTensor()])
 
     # Load master datasets once
-    master_train_val_dataset = MNIST_Temporal(root=data_root, train=True, download=True, transform=transform_ae)
-    master_test_dataset = MNIST_Temporal(root=data_root, train=False, download=True, transform=transform_ae)
+    master_train_val_dataset = FashionMNIST_Temporal(root=data_root, train=True, download=True, transform=transform_ae)
+    master_test_dataset = FashionMNIST_Temporal(root=data_root, train=False, download=True, transform=transform_ae)
 
     # Perform train/validation split once
     # Ensure consistent splitting if seeds are set globally
@@ -89,7 +130,7 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     train_images_normal_ae = []
     train_labels_normal_ae = []
     for spikes, img_flat, label in master_train_val_dataset:
-        if label != 0: # Filter out digit '0'
+        if label != ANOMALY_LABEL: # Filter out digit '0'
             train_spikes_normal_ae.append(spikes)
             train_images_normal_ae.append(img_flat)
             train_labels_normal_ae.append(label)
@@ -105,8 +146,8 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     
     # Count number of 0s and 1-9s in the original train_subset for verification
     original_train_labels = torch.tensor([label for _, _, label in master_train_val_dataset])
-    num_zeros_in_train = (original_train_labels == 0).sum().item()
-    num_non_zeros_in_train = (original_train_labels != 0).sum().item()
+    num_zeros_in_train = (original_train_labels == ANOMALY_LABEL).sum().item()
+    num_non_zeros_in_train = (original_train_labels != ANOMALY_LABEL).sum().item()
     print(f"Original master_train_val_dataset: {len(master_train_val_dataset)} samples. Zeros: {num_zeros_in_train}, Non-zeros: {num_non_zeros_in_train}")
     print(f"Filtered train_loader_ae: {len(train_spikes_ae_tensor)} samples (should be non-zeros).")
 
@@ -122,8 +163,8 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     val_images_full = torch.stack([i for _, i, _ in val_subset])
     val_labels_full = torch.tensor([l for _, _, l in val_subset])
 
-    indices_1_9_mask = val_labels_full != 0
-    indices_0_mask = val_labels_full == 0
+    indices_1_9_mask = val_labels_full != ANOMALY_LABEL
+    indices_0_mask = val_labels_full == ANOMALY_LABEL
 
     # Ensure consistent sampling for val_loader_reduced_ae if seeds are set globally
     # For randperm, if global seed is set, it should be deterministic.
@@ -148,55 +189,11 @@ def get_snn_autoencoder_dataloaders(batch_size=128, data_root='../data'):
     val_labels_reduced_0 = val_labels_full[indices_0_mask]
     val_labels_reduced = torch.cat((val_labels_reduced_1_9, val_labels_reduced_0), dim=0)
     
-    num_zeros_reduced = (val_labels_reduced == 0).sum().item()
-    num_non_zeros_reduced = (val_labels_reduced != 0).sum().item()
+    num_zeros_reduced = (val_labels_reduced == ANOMALY_LABEL).sum().item()
+    num_non_zeros_reduced = (val_labels_reduced != ANOMALY_LABEL).sum().item()
     print(f"Reduced validation set: {len(val_labels_reduced)} samples. Zeros: {num_zeros_reduced}, Non-zeros: {num_non_zeros_reduced}")
 
     val_loader_reduced_ae = DataLoader(TensorDataset(val_spikes_reduced_ae_input, target_images_val_reduced_ae, val_labels_reduced), 
                                       batch_size=batch_size, shuffle=False)
 
     return train_loader_ae, val_loader_reduced_ae, test_loader_ae
-
-if __name__ == '__main__':
-    # Example of how to use the function
-    # Note: Seeds should be set here if you run this file directly for testing data loading
-    torch.manual_seed(42)
-    np.random.seed(42)
-
-    print("Testing MNIST SNN data loading...")
-    train_loader, val_loader, test_loader = get_snn_autoencoder_dataloaders()
-    
-    print(f"Number of batches in train_loader_ae: {len(train_loader)}")
-    print(f"Number of batches in val_loader_reduced_ae: {len(val_loader)}")
-    print(f"Number of batches in test_loader_ae: {len(test_loader)}")
-
-    # Check a batch from train_loader
-    spikes_batch, images_batch, labels_batch = next(iter(train_loader))
-    print(f"Train spikes batch shape: {spikes_batch.shape}") # Expected: (batch_size, time_steps, 784)
-    print(f"Train images batch shape: {images_batch.shape}")   # Expected: (batch_size, 784)
-    print(f"Train labels batch shape: {labels_batch.shape}")     # Expected: (batch_size,)
-
-    # Check a batch from val_loader_reduced_ae
-    spikes_val_batch, images_val_batch, labels_val_batch = next(iter(val_loader))
-    print(f"Val spikes batch shape: {spikes_val_batch.shape}")
-    print(f"Val images batch shape: {images_val_batch.shape}")
-    print(f"Val labels batch shape: {labels_val_batch.shape}")
-
-    # Select one example from the validation batch
-    example_idx = 0  # First example in the batch
-    example_spikes = spikes_val_batch[example_idx]  # Shape: (time_steps, 784)
-    
-    # Create a figure to visualize the spikes over time
-    plt.figure(figsize=(15, 5))
-    
-    # Plot spikes for each time step
-    for t in range(example_spikes.shape[0]):
-        plt.subplot(1, example_spikes.shape[0], t+1)
-        plt.imshow(example_spikes[t].reshape(28, 28), cmap='binary')
-        plt.title(f'Time step {t}')
-        plt.axis('off')
-    
-    plt.suptitle(f'Spike visualization for example {example_idx} over all time steps')
-    plt.tight_layout()
-    plt.show()
-    print("Data loading test complete.") 
