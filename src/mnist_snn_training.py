@@ -37,7 +37,7 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Hyperparameters
-learning_rate_ae = 5e-4
+learning_rate_ae = 1e-4
 beta_snn = 0.9
 
 # Define all model configurations
@@ -57,43 +57,63 @@ model_configs = [
 os.makedirs("../models/mnist/snn", exist_ok=True)
 os.makedirs("../plots/snn_training", exist_ok=True)
 
-def train_snn_autoencoder(model, train_loader, val_loader, epochs, model_name, device):
-    """Train a single SNN autoencoder model"""
+def train_temporal_snn(model, train_loader, val_loader, num_epochs=15, lr=1e-4):
+    """
+    Train the temporal SNN autoencoder using MSE loss.
     
+    Args:
+        model: The SNN autoencoder model
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        num_epochs: Number of training epochs
+        lr: Learning rate
+    
+    Returns:
+        train_losses: List of training losses
+        val_losses: List of validation losses
+    """
     model = model.to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate_ae)
+    optimizer = optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
     
     train_losses = []
     val_losses = []
     
-    print(f"\nTraining {model_name}...")
+    print(f"\nStarting training for {num_epochs} epochs...")
     
-    for epoch in range(epochs):
+    for epoch in range(num_epochs):
         # Training phase
         model.train()
         train_loss = 0.0
         train_batches = 0
         
-        for spikes_batch, images_batch, labels_batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        # Use tqdm for progress bar
+        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+        
+        for spikes_batch, images_batch, labels_batch in train_pbar:
             # Move data to device
-            spikes_batch = spikes_batch.to(device)
-            images_batch = images_batch.to(device)
-            # labels_batch is not needed for autoencoder training but available if needed
+            spikes_batch = spikes_batch.to(device)  # (batch_size, time_steps, features)
+            images_batch = images_batch.to(device)  # (batch_size, features)
             
             # Zero gradients
             optimizer.zero_grad()
             
             # Forward pass
-            outputs = model(spikes_batch)
-            loss = criterion(outputs, images_batch)
+            reconstruction = model(spikes_batch)
+            
+            # Calculate MSE loss between reconstruction and original image
+            loss = criterion(reconstruction, images_batch)
             
             # Backward pass
             loss.backward()
             optimizer.step()
             
+            # Accumulate loss
             train_loss += loss.item()
             train_batches += 1
+            
+            # Update progress bar
+            train_pbar.set_postfix({'Loss': f'{loss.item():.6f}'})
         
         # Validation phase
         model.eval()
@@ -101,15 +121,22 @@ def train_snn_autoencoder(model, train_loader, val_loader, epochs, model_name, d
         val_batches = 0
         
         with torch.no_grad():
-            for spikes_batch, images_batch, labels_batch in val_loader:
+            val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+            
+            for spikes_batch, images_batch, labels_batch in val_pbar:
                 spikes_batch = spikes_batch.to(device)
                 images_batch = images_batch.to(device)
                 
-                outputs = model(spikes_batch)
-                loss = criterion(outputs, images_batch)
+                # Forward pass
+                reconstruction = model(spikes_batch)
+                
+                # Calculate loss
+                loss = criterion(reconstruction, images_batch)
                 
                 val_loss += loss.item()
                 val_batches += 1
+                
+                val_pbar.set_postfix({'Loss': f'{loss.item():.6f}'})
         
         # Calculate average losses
         avg_train_loss = train_loss / train_batches
@@ -118,7 +145,7 @@ def train_snn_autoencoder(model, train_loader, val_loader, epochs, model_name, d
         train_losses.append(avg_train_loss)
         val_losses.append(avg_val_loss)
         
-        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
+        print(f"Epoch [{epoch+1}/{num_epochs}] - Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
     
     return train_losses, val_losses
 
@@ -142,33 +169,6 @@ def plot_training_curves(train_losses, val_losses, model_name, save_path):
 # Dictionary to store all training results
 all_results = {}
 
-# # train only one model
-# model = SmallSNNAutoencoder(latent_size=8, beta=beta_snn)
-# model_name = "SmallSNNAutoencoder_8"
-# train_losses, val_losses = train_snn_autoencoder(
-#     model, train_loader_ae, val_loader_ae, 
-#     15, model_name, device
-# )
-
-# plot_training_curves(train_losses, val_losses, model_name, f"../plots/snn_training/{model_name}_training_curves.png")
-
-# # save it temporarily
-# # Save model
-# model_save_path = f"../models/mnist/snn/temporal/{model_name}.pth"
-# torch.save(model.state_dict(), model_save_path)
-# print(f"Model saved to: {model_save_path}")
-
-# # Save training results
-# results = {
-#     "train_loss": train_losses,
-#     "val_loss": val_losses
-# }
-# results_save_path = f"../models/mnist/snn/temporal/{model_name}_losses.json"
-# with open(results_save_path, 'w') as f:
-#     json.dump(results, f)
-# print(f"Training results saved to: {results_save_path}")
-
-
 # Train all models
 for i, config in enumerate(model_configs):
     start_time = time.time()
@@ -183,12 +183,9 @@ for i, config in enumerate(model_configs):
     print(f"Latent Size: {config['latent_size']}")
     print(f"Epochs: {config['epochs']}")
     print(f"{'='*60}")
-    
+
     # Train the model
-    train_losses, val_losses = train_snn_autoencoder(
-        model, train_loader_ae, val_loader_ae, 
-        config["epochs"], model_name, device
-    )
+    train_losses, val_losses = train_temporal_snn(model, train_loader_ae, val_loader_ae, config["epochs"], learning_rate_ae)
     
     # Save model
     model_save_path = f"../models/mnist/snn/{model_name}.pth"

@@ -82,7 +82,7 @@ with torch.no_grad():
     latent_spikes_over_time = []
     for t in range(num_time_steps):
         current_input_slice = spikes_batch[:, t, :]  # Shape: (batch_size, num_features)
-        spk_out_encoder_t, _mem_out_encoder_t = model.encoder(current_input_slice)
+        spk_out_encoder_t = model.encoder(current_input_slice)
         latent_spikes_over_time.append(spk_out_encoder_t)
     
     # Stack and average over time to get representative latent features
