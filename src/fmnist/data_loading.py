@@ -3,7 +3,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
 
-ANOMALY_LABEL = 0
+ANOMALY_LABEL = 8  # Bag - more visually distinct from clothing items
 
 # fmnist for ann or rate snn
 def get_fmnist_ratio_dataloaders(batch_size=128, data_root='../data'):
